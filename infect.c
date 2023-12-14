@@ -57,8 +57,9 @@ struct dynamic_t get_dynamic_segment(Elf64_Phdr dyn_phdr, int host_fd){
   dyn_start = dyn_phdr.p_offset;
   dyn_filesz = dyn_phdr.p_filesz;
   dyn_end = dyn_start + dyn_filesz;
+
+  /* getting dyn_entries */
   dyn_entries = (Elf64_Dyn *)malloc(dyn_filesz);
-  
   if (dyn_entries == NULL) {
     perror("malloc");
     close(host_fd);
@@ -88,7 +89,7 @@ struct dynamic_t get_dynamic_segment(Elf64_Phdr dyn_phdr, int host_fd){
 }
 
 struct rela_t get_relocation_table(struct dynamic_t dyn_segment, int host_fd) {
-  // [+]-------- Finding the relocation table --------[+]*/
+  // [+]-------- Finding the relocation table --------[+]
   struct rela_t table;
 
   /* DT_RELA DT_RELAENT */
@@ -135,10 +136,11 @@ struct rela_t get_relocation_table(struct dynamic_t dyn_segment, int host_fd) {
     y++;
   }
 
-  printf("[+] DT_RELA Entires:\n\tADDEND\tOFFSET\tINFO\tTYPE\n");
+  printf("[+] DT_RELA Entires:\nINDEX\tADDEND\tOFFSET\tINFO\tTYPE\n");
   for(int k = 0; k < y; k++){
     if(rela_entries[k].r_info == R_X86_64_RELATIVE){
-      printf("\t0x%x\t0x%x\t0x%x\tR_X86_64_RELATIVE\n", rela_entries[k].r_addend, rela_entries[k].r_offset, rela_entries[k].r_info);
+      printf("%i\t0x%x\t0x%x\t0x%x\tR_X86_64_RELATIVE\n", k, rela_entries[k].r_addend, rela_entries[k].r_offset, rela_entries[k].r_info);
+      
     }
   }
   table.count = y;
@@ -154,6 +156,7 @@ int main(int argc, char *argv[]) {
   int host_fd, ofd;
   struct stat st;
   char *host_mem;
+  const uint8_t addr[2] = {0x7b, 0x11};  
 
   if ((host_fd = open(argv[1], O_RDWR)) < 0) return 1;
 
@@ -168,20 +171,27 @@ int main(int argc, char *argv[]) {
   phdr = (Elf64_Phdr *)(host_mem + ehdr->e_phoff);
   shdr = (Elf64_Shdr *)(host_mem + ehdr->e_shoff);
 
-  for(int i = 0; i < ehdr->e_phnum; i++) {
+  for (int i = 0; i < ehdr->e_phnum; i++) {
     if (phdr[i].p_type == PT_DYNAMIC){
-      
+  		    
       struct dynamic_t dyn_segment = get_dynamic_segment(phdr[i], host_fd);
       struct rela_t relocation_table = get_relocation_table(dyn_segment, host_fd); 
       
       printf("[+] .dynamic has %i entries\n", dyn_segment.count);
       printf("[+] relocation table has %i entries\n", relocation_table.count);
 
+      printf("[*] %x [*]\n", host_mem[relocation_table.entries[1].r_offset - 0x1000]);
+      printf("[*] %x [*]\n", host_mem[relocation_table.entries[1].r_offset - 0x1000 + 1]);
+      host_mem[relocation_table.entries[1].r_offset - 0x1000] = 0x7b;
+      host_mem[relocation_table.entries[1].r_offset - 0x1000 + 1] = 0x11;
+      printf("[*] %x [*]\n", host_mem[relocation_table.entries[1].r_offset - 0x1000]);
+      printf("[*] %x [*]\n", host_mem[relocation_table.entries[1].r_offset - 0x1000 + 1]);
+
+      write(host_fd, host_mem, st.st_size);
       free(relocation_table.entries);
       free(dyn_segment.entries);
     }
   }
-  //free(rela_entries);
   close(host_fd);
   munmap(host_mem, st.st_size);
   return 0;
