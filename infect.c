@@ -180,13 +180,13 @@ int main(int argc, char *argv[]) {
       printf("[+] .dynamic has %i entries\n", dyn_segment.count);
       printf("[+] relocation table has %i entries\n", relocation_table.count);
 
-      printf("[*] %x [*]\n", host_mem[relocation_table.entries[1].r_offset - 0x1000]);
-      printf("[*] %x [*]\n", host_mem[relocation_table.entries[1].r_offset - 0x1000 + 1]);
       host_mem[relocation_table.entries[1].r_offset - 0x1000] = 0x7b;
       host_mem[relocation_table.entries[1].r_offset - 0x1000 + 1] = 0x11;
-      printf("[*] %x [*]\n", host_mem[relocation_table.entries[1].r_offset - 0x1000]);
-      printf("[*] %x [*]\n", host_mem[relocation_table.entries[1].r_offset - 0x1000 + 1]);
 
+      if(lseek(host_fd, 0, SEEK_SET) == -1) {
+        perror("lseek");
+        close(host_fd);
+      }
       write(host_fd, host_mem, st.st_size);
       free(relocation_table.entries);
       free(dyn_segment.entries);
