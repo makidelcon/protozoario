@@ -1,12 +1,3 @@
-/*
-  -   Find the .dynamic
-    -  Find all entries
-  -   Find the DT_RELA
-    -   Find all entries (DT_RELAENT)
-    -   Find file offset of relocations
-  -> Find the .init_array section
-*/
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,7 +7,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
-#define TMP ".proto"
+#include <stdbool.h>
 
 int is_Elf(Elf64_Ehdr *elf_ehdr) {
   /* ELF magic bytes are 0x7f,'E','L','F'
@@ -41,7 +32,12 @@ struct rela_t{
 
 struct phdrs_t{
   int count;
-  Elf64_Phdr *phdr;
+  Elf64_Phdr *list;
+};
+
+struct shdrs_t{
+  int count;
+  Elf64_Shdr *list;
 };
 
 struct dynamic_t get_dynamic_segment(Elf64_Phdr dyn_phdr, int host_fd){
@@ -142,16 +138,31 @@ struct rela_t get_relocation_table(struct dynamic_t dyn_segment, int host_fd) {
   return table; 
 }
 
-Elf64_Addr get_file_offset(struct phdrs_t phdrs, Elf64_Addr offset) { 
+Elf64_Addr get_file_offset(struct phdrs_t phdrs, Elf64_Addr offset) {
   Elf64_Addr file_offset = 0;
-  for (int i = 0; i < phdrs.count; i++) {
-    Elf64_Addr endAddr = phdrs.phdr[i].p_vaddr + phdrs.phdr[i].p_memsz;
-    if (offset >= phdrs.phdr[i].p_vaddr && offset <= endAddr) {
-      file_offset = offset - phdrs.phdr[i].p_vaddr + phdrs.phdr[i].p_offset;
+  for(int i = 0; i < phdrs.count; i++) {
+    Elf64_Addr endAddr = phdrs.list[i].p_vaddr + phdrs.list[i].p_memsz;
+    if(offset >= phdrs.list[i].p_vaddr && offset <= endAddr) {
+      file_offset = offset - phdrs.list[i].p_vaddr + phdrs.list[i].p_offset;
       break;
     }
   }
   return file_offset;
+}
+
+bool withinSection(struct shdrs_t shdrs, char *section_name,  Elf64_Addr offset) {
+  size_t section_size = 8;
+  size_t actual_section_size = 0;
+  for(int i = 0; i < shdrs.count; i++){
+    unsigned char *actual_section_name = (unsigned char *)(&shdrs.list[i].sh_name);
+    while(*actual_section_name++ != '\0'){
+      actual_section_size += 1;
+    }
+    if((*actual_section_name == '\0') || (actual_section_size != section_size)){
+      return 1;
+    }
+  }
+  return 0;
 }
 
 int main(int argc, char *argv[]) {
@@ -160,6 +171,7 @@ int main(int argc, char *argv[]) {
   Elf64_Shdr *shdr;
   Elf64_Rela *victim_rela;
   struct phdrs_t phdrs;
+  struct shdrs_t shdrs;
   struct dynamic_t dyn_segment;
   struct rela_t relocation_table;
 
@@ -176,13 +188,15 @@ int main(int argc, char *argv[]) {
   ehdr = (Elf64_Ehdr *)host_mem;
   if(!(is_Elf(ehdr))) return 3;
 
-  phdrs.phdr = (Elf64_Phdr *)(host_mem + ehdr->e_phoff);
+  phdrs.list = (Elf64_Phdr *)(host_mem + ehdr->e_phoff);
   phdrs.count = ehdr->e_phnum;
-  shdr = (Elf64_Shdr *)(host_mem + ehdr->e_shoff);
   
+  shdrs.list = (Elf64_Shdr *)(host_mem + ehdr->e_shoff);
+  shdrs.count = ehdr->e_shoff;
+
   for (int i = 0; i < phdrs.count; i++) {
-    if (phdrs.phdr[i].p_type == PT_DYNAMIC){ 
-      dyn_segment = get_dynamic_segment(phdrs.phdr[i], host_fd);
+    if (phdrs.list[i].p_type == PT_DYNAMIC){
+      dyn_segment = get_dynamic_segment(phdrs.list[i], host_fd);
       relocation_table = get_relocation_table(dyn_segment, host_fd);
       
       printf("[+] .dynamic has %i entries\n", dyn_segment.count);
@@ -191,9 +205,15 @@ int main(int argc, char *argv[]) {
       printf("[+] DT_RELA Entires:\nINDEX\tADDEND\tOFFSET\tINFO\tTYPE\n");
       for(int j = 0; j < relocation_table.count; j++){
         if(relocation_table.entries[j].r_info == R_X86_64_RELATIVE){
+          if(withinSection(shdrs, ".init_array", relocation_table.entries[1].r_offset) == 0){
+            printf("%i is in .init_array\n", j);
+          }
           printf("%i\t0x%x\t0x%x\t0x%x\tR_X86_64_RELATIVE\n", j, relocation_table.entries[j].r_addend, relocation_table.entries[j].r_offset, relocation_table.entries[j].r_info);
         }
       }
+
+
+      
       /* Writing to the mmaped page and copying the mmaped page to the host */
       printf("[+] File offset of the victim relocation entry 0x%x\n", get_file_offset(phdrs, relocation_table.entries[1].r_offset));
       printf("[+] %x\n", host_mem[get_file_offset(phdrs, relocation_table.entries[1].r_offset)]);
@@ -205,6 +225,7 @@ int main(int argc, char *argv[]) {
         close(host_fd);
       }
       write(host_fd, host_mem, st.st_size);
+      
       free(relocation_table.entries);
       free(dyn_segment.entries);
     }
